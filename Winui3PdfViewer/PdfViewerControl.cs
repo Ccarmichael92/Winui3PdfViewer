@@ -1,28 +1,27 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.UI.Dispatching;
+﻿using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
-using Windows.Storage;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading;
+using System.Threading.Tasks;
+using Windows.Storage;
+using Winui3PdfViewer.Helpers;
+using Winui3PdfViewer.Interfaces;
+using Winui3PdfViewer.Providers;
 
 namespace Winui3PdfViewer
 {
-    public interface IBitmapProvider
+    public sealed class PdfViewerControl : Control, IDisposable
     {
-        Task<IReadOnlyList<Bitmap>> GetBitmapsAsync(StorageFile file, CancellationToken cancellationToken = default);
-    }
-
-    public sealed class PdfViewerControl : Control
-    {
-        //constants representing controls
+        // Template parts
         private const string PartScrollViewer = "PART_ScrollViewer";
         private const string PartViewportRoot = "PART_ViewportRoot";
         private const string PartPagePanel = "PART_PagePanel";
@@ -37,7 +36,7 @@ namespace Winui3PdfViewer
         private const string PartProgressRing = "PART_ProgressRing";
         private const string PartLoadingOverlay = "PART_LoadingOverlay";
 
-        //controls
+        // Controls
         private ScrollViewer? _scrollViewer;
         private Grid? _viewportRoot;
         private StackPanel? _pagePanel;
@@ -47,15 +46,16 @@ namespace Winui3PdfViewer
         private TextBlock? _pageOverlay;
         private ProgressRing? _progressRing;
         private Grid? _loadingOverlay;
+
         private bool _isTemplateApplied;
-        private bool _hasFitOnInitialLoad = false;
+        private bool _hasFitOnInitialLoad = true;
         private StorageFile? _pendingFileToLoad;
 
-
-
-
+        // Image sizes
         private double _imagePixelWidth;
         private double _imagePixelHeight;
+
+        // Scroll preservation during zoom
         private double scrollRatioX = 0;
         private double scrollRatioY = 0;
 
@@ -63,20 +63,29 @@ namespace Winui3PdfViewer
         private List<BitmapImage> _images = new();
         private List<Bitmap>? _rawBitmaps;
         private List<BitmapImage>? _pendingImages;
+        private string _cacheFolder = string.Empty;
+        private bool _disposed;
+        private int _imagesLoadedCount;
+        private bool _suppressAutoFitDuringPageSwap;
+        private bool _autoFitEnabled = true;
+        private bool _isFirstFileLoad = true;
+
 
         private bool IsFitPending { get; set; }
-        
+
+        public string CacheFolder => _cacheFolder;
 
         public PdfViewerControl()
         {
             DefaultStyleKey = typeof(PdfViewerControl);
             Loaded += OnLoaded;
+            Unloaded += OnUnloaded;
             SizeChanged += OnSizeChanged;
         }
 
         public IBitmapProvider? BitmapProvider { get; set; }
 
-        #region Dependency Properties
+        #region Dependency properties
 
         public static readonly DependencyProperty ZoomProperty =
             DependencyProperty.Register(nameof(Zoom), typeof(double), typeof(PdfViewerControl),
@@ -118,10 +127,47 @@ namespace Winui3PdfViewer
             set => SetValue(SinglePageDisplayProperty, value);
         }
 
+        public static readonly DependencyProperty UseTempFilesProperty =
+            DependencyProperty.Register(nameof(UseTempFiles), typeof(bool), typeof(PdfViewerControl),
+                new PropertyMetadata(false, OnUseTempFilesChanged));
+
+        public bool UseTempFiles
+        {
+            get => (bool)GetValue(UseTempFilesProperty);
+            set => SetValue(UseTempFilesProperty, value);
+        }
+
+        public static readonly DependencyProperty UseWidthFitProperty =
+            DependencyProperty.Register(nameof(UseWidthFit),typeof(bool),typeof(PdfViewerControl),
+                new PropertyMetadata(false));
+
+        public bool UseWidthFit
+        {
+            get => (bool)GetValue(UseWidthFitProperty);
+            set => SetValue(UseWidthFitProperty, value);
+        }
+
+        public static readonly DependencyProperty OnlyFitFirstFileProperty =
+            DependencyProperty.Register(nameof(OnlyFitFirstFile),typeof(bool),typeof(PdfViewerControl),
+                new PropertyMetadata(false));
+
+        public bool OnlyFitFirstFile
+        {
+            get => (bool)GetValue(OnlyFitFirstFileProperty);
+            set => SetValue(OnlyFitFirstFileProperty, value);
+        }
+
+
+
         private static void OnSinglePageDisplayChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             var control = (PdfViewerControl)d;
             control.UpdateImageSource();
+        }
+
+        private static void OnUseTempFilesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            // Reserved for future toggles
         }
 
         #endregion
@@ -144,13 +190,10 @@ namespace Winui3PdfViewer
 
             _isTemplateApplied = true;
 
-            // If a load was queued before template was ready, run it now
-            if (_pendingFileToLoad != null)
+            if (_scrollViewer != null)
             {
-                _ = LoadFromStorageFileAsync(_pendingFileToLoad);
-                _pendingFileToLoad = null;
+                _scrollViewer.ViewChanged += OnScrollViewerViewChanged;
             }
-
 
             if (GetTemplateChild(PartBtnZoomIn) is Button btnIn) btnIn.Click += (_, __) => ZoomIn();
             if (GetTemplateChild(PartBtnZoomOut) is Button btnOut) btnOut.Click += (_, __) => ZoomOut();
@@ -159,6 +202,12 @@ namespace Winui3PdfViewer
 
             if (_btnPrevPage != null) _btnPrevPage.Click += (_, __) => ShowPage(_currentIndex - 1);
             if (_btnNextPage != null) _btnNextPage.Click += (_, __) => ShowPage(_currentIndex + 1);
+
+            if (_pendingFileToLoad != null)
+            {
+                _ = LoadFileAsync(_pendingFileToLoad);
+                _pendingFileToLoad = null;
+            }
 
             if (_pendingImages != null)
             {
@@ -171,12 +220,18 @@ namespace Winui3PdfViewer
             UpdateScaledLayout();
             CenterInView();
             UpdateZoomOverlay();
+            UpdatePageOverlay();
         }
 
         private void OnLoaded(object? sender, RoutedEventArgs e)
         {
             UpdateScaledLayout();
             CenterInView();
+        }
+
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            Dispose();
         }
 
         private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
@@ -194,11 +249,31 @@ namespace Winui3PdfViewer
 
         #region PDF ingestion
 
-        public async Task LoadFromStorageFileAsync(StorageFile file, CancellationToken cancellationToken = default)
+        public async Task LoadFileAsync(StorageFile file, CancellationToken cancellationToken = default)
         {
-            _hasFitOnInitialLoad = false;
-
             if (file is null) throw new ArgumentNullException(nameof(file));
+
+            DisposeAndClearRawBitmaps();
+            _pendingImages = null;
+            _pendingFileToLoad = null;
+            _currentIndex = 0;
+            IsFitPending = false;
+
+            // Decide whether to auto-fit this load
+            if (OnlyFitFirstFile)
+            {
+                // Only auto-fit if this is the very first file
+                _hasFitOnInitialLoad = _isFirstFileLoad ? false : true;
+            }
+            else
+            {
+                // Always auto-fit on each new file
+                _hasFitOnInitialLoad = false;
+            }
+
+            EnsureCacheFolder();
+            SetBitmapProvider(file.Name);
+
             if (BitmapProvider == null)
                 throw new InvalidOperationException("BitmapProvider is not set.");
 
@@ -222,17 +297,46 @@ namespace Winui3PdfViewer
             finally
             {
                 SetLoadingState(false);
+                _isFirstFileLoad = false; // mark after first successful load
             }
         }
 
-        private void SetBitmapsInternal(IReadOnlyList<Bitmap> bitmaps)
+        private void SetBitmapProvider(string name)
+        {
+            if (DocumentTypeHelper.TryParse(Path.GetExtension(name), out var docType))
+            {
+                if (docType == DocumentType.Pdf && (BitmapProvider == null || BitmapProvider.GetType() != typeof(PdfToBitmapListProvider)))
+                {
+                    BitmapProvider = new PdfToBitmapListProvider(UseTempFiles ? CacheFolder : null);
+                }
+                else if (docType == DocumentType.Tiff && (BitmapProvider == null || BitmapProvider.GetType() != typeof(TiffToBitmapListProvider)))
+                {
+                    BitmapProvider = new TiffToBitmapListProvider(UseTempFiles ? CacheFolder : null);
+                }
+            }
+            else
+            {
+                throw new NotSupportedException($"File type not supported: {name}");
+            }
+        }
+
+        private void SetBitmapsInternal(BitmapResult bitmaps)
         {
             DisposeAndClearRawBitmaps();
+            _imagesLoadedCount = 0;
 
-            _rawBitmaps = new List<Bitmap>(bitmaps.Count);
-            _rawBitmaps.AddRange(bitmaps);
+            List<BitmapImage> converted;
 
-            var converted = bitmaps.Select(ConvertBitmapToBitmapImage).ToList();
+            if (!bitmaps.IsLocalFiles)
+            {
+                _rawBitmaps = new List<Bitmap>(bitmaps.Bitmaps.Count);
+                _rawBitmaps.AddRange(bitmaps.Bitmaps);
+                converted = bitmaps.Bitmaps.Select(ConvertBitmapToBitmapImage).ToList();
+            }
+            else
+            {
+                converted = bitmaps.FilePaths.Select(ConvertBitmapToBitmapImage).ToList();
+            }
 
             if (_pagePanel == null)
             {
@@ -243,6 +347,15 @@ namespace Winui3PdfViewer
             _images = converted;
             _currentIndex = 0;
             UpdateImageSource();
+
+            // If we are not going to auto-fit, immediately apply the current Zoom
+            if (_hasFitOnInitialLoad)
+            {
+                UpdateScaledLayout();
+                CenterInView();
+                UpdateZoomOverlay();
+            }
+
         }
 
         private void DisposeAndClearRawBitmaps()
@@ -255,10 +368,14 @@ namespace Winui3PdfViewer
                 }
                 _rawBitmaps = null;
             }
+
             _images.Clear();
             _currentIndex = 0;
             _imagePixelWidth = 0;
             _imagePixelHeight = 0;
+
+            if (_pagePanel != null)
+                _pagePanel.Children.Clear();
         }
 
         private async Task RunOnUIThreadAsync(Action action)
@@ -288,54 +405,77 @@ namespace Winui3PdfViewer
             if (_images.Count == 0 || _pagePanel == null) return;
 
             _pagePanel.Children.Clear();
+            _imagesLoadedCount = 0;
 
             if (SinglePageDisplay)
             {
                 _pagePanel.Children.Add(CreateImageElement(_images[_currentIndex]));
-                _btnPrevPage!.Visibility = _currentIndex > 0 ? Visibility.Visible : Visibility.Collapsed;
-                _btnNextPage!.Visibility = _currentIndex < _images.Count - 1 ? Visibility.Visible : Visibility.Collapsed;
+                if (_btnPrevPage != null) _btnPrevPage.Visibility = _currentIndex > 0 ? Visibility.Visible : Visibility.Collapsed;
+                if (_btnNextPage != null) _btnNextPage.Visibility = _currentIndex < _images.Count - 1 ? Visibility.Visible : Visibility.Collapsed;
             }
             else
             {
-                foreach (var bmp in _images)
+                for (int i = 0; i < _images.Count; i++)
+                {
+                    var bmp = _images[i];
                     _pagePanel.Children.Add(CreateImageElement(bmp));
+                }
 
-                _btnPrevPage!.Visibility = Visibility.Collapsed;
-                _btnNextPage!.Visibility = Visibility.Collapsed;
+                if (_btnPrevPage != null) _btnPrevPage.Visibility = Visibility.Collapsed;
+                if (_btnNextPage != null) _btnNextPage.Visibility = Visibility.Collapsed;
             }
 
-            _imagePixelWidth = _images[_currentIndex].PixelWidth;
-            _imagePixelHeight = _images[_currentIndex].PixelHeight;
-            UpdateScaledLayout();
-            CenterInView();
             UpdatePageOverlay();
-
-            if (!_hasFitOnInitialLoad)
-            {
-                FitToControl();
-                _hasFitOnInitialLoad = true;
-            }
-
         }
 
         private Microsoft.UI.Xaml.Controls.Image CreateImageElement(BitmapImage bmp)
         {
-            return new Microsoft.UI.Xaml.Controls.Image
+            var img = new Microsoft.UI.Xaml.Controls.Image
             {
                 Source = bmp,
-                Stretch = Stretch.Fill,
+                Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
+
+            img.ImageOpened += (s, e) =>
+            {
+                _imagePixelWidth = bmp.PixelWidth;
+                _imagePixelHeight = bmp.PixelHeight;
+
+                UpdateScaledLayout();
+                CenterInView();
+                UpdatePageOverlay();
+
+                if (_autoFitEnabled && !_suppressAutoFitDuringPageSwap && !_hasFitOnInitialLoad)
+                {
+                    FitToControl();
+                    _hasFitOnInitialLoad = true;
+                }
+
+                _imagesLoadedCount++;
+                if (_imagesLoadedCount == _images.Count)
+                {
+                    DispatcherQueue?.TryEnqueue(() =>
+                    {
+                        _scrollViewer?.ChangeView(0, 0, null, true);
+                    });
+                }
+            };
+
+            return img;
         }
 
         private void ShowPage(int index)
         {
             if (index < 0 || index >= _images.Count) return;
+
+            _suppressAutoFitDuringPageSwap = true;
             _currentIndex = index;
             UpdateImageSource();
             UpdatePageOverlay();
-
+            UpdateScaledLayout();
+            _suppressAutoFitDuringPageSwap = false;
         }
 
         public static BitmapImage ConvertBitmapToBitmapImage(Bitmap bitmap)
@@ -349,33 +489,16 @@ namespace Winui3PdfViewer
             return bmpImage;
         }
 
+        public static BitmapImage ConvertBitmapToBitmapImage(string bitmapPath)
+        {
+            var bmpImage = new BitmapImage();
+            bmpImage.UriSource = new Uri(bitmapPath + "?t=" + Guid.NewGuid()); // bust cache
+            return bmpImage;
+        }
+
         #endregion
 
-        #region Zoom logic and animation
-
-        private static void OnZoomChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            var control = (PdfViewerControl)d;
-
-            var newValue = (double)e.NewValue;
-            if (newValue < control.MinZoom) newValue = control.MinZoom;
-            if (newValue > control.MaxZoom) newValue = control.MaxZoom;
-
-            if (Math.Abs(newValue - (double)e.NewValue) > double.Epsilon)
-                control.Zoom = newValue;
-
-            control.IsFitPending = false;
-            control.UpdateScaledLayout();
-            control.CenterInView();
-            control.UpdateZoomOverlay();
-        }
-
-        private static void OnZoomBoundsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-        {
-            var control = (PdfViewerControl)d;
-            if (control.Zoom < control.MinZoom) control.Zoom = control.MinZoom;
-            if (control.Zoom > control.MaxZoom) control.Zoom = control.MaxZoom;
-        }
+        #region Layout, centering, overlay
 
         private void UpdateScaledLayout()
         {
@@ -421,12 +544,113 @@ namespace Winui3PdfViewer
                 _zoomOverlay.Text = $"{Zoom * 100:0}%";
         }
 
+        // Always show "Page N of X" (single-page or multi-page)
+        private void UpdatePageOverlay()
+        {
+            if (_pageOverlay == null || _images.Count == 0)
+            {
+                if (_pageOverlay != null) _pageOverlay.Text = "";
+                return;
+            }
+
+            _pageOverlay.Text = $"Page {_currentIndex + 1} of {_images.Count}";
+        }
+
+
+        // Multi-page: update current page by which child is most visible
+        private void OnScrollViewerViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+        {
+            if (_scrollViewer == null || _pagePanel == null || _images.Count == 0) return;
+            if (SinglePageDisplay) return; // Single page uses ShowPage
+
+            double viewportTop = _scrollViewer.VerticalOffset;
+            double viewportBottom = viewportTop + _scrollViewer.ViewportHeight;
+
+            int bestPage = 0;
+            double bestVisible = 0;
+
+            for (int i = 0; i < _pagePanel.Children.Count; i++)
+            {
+                if (_pagePanel.Children[i] is FrameworkElement child)
+                {
+                    double childTop = child.TransformToVisual(_pagePanel).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+                    double childBottom = childTop + child.ActualHeight;
+
+                    double visible = Math.Min(childBottom, viewportBottom) - Math.Max(childTop, viewportTop);
+                    if (visible > bestVisible)
+                    {
+                        bestVisible = visible;
+                        bestPage = i;
+                    }
+                }
+            }
+
+            if (_currentIndex != bestPage)
+            {
+                _currentIndex = bestPage;
+                UpdatePageOverlay();
+            }
+        }
+
+        #endregion
+
+        #region Zoom animation
+
         private bool _isAnimatingZoom;
         private double _zoomStart;
         private double _zoomTarget;
         private double _zoomDurationMs;
         private DateTime _zoomStartTime;
         private double _centerX, _centerY, _viewportW, _viewportH;
+
+        public void ZoomIn(double step = 0.1) => AnimateZoom(Zoom + step);
+        public void ZoomOut(double step = 0.1) => AnimateZoom(Zoom - step);
+        public void ZoomTo100() { IsFitPending = false; AnimateZoom(1.0); }
+
+        public void FitToControl()
+        {
+            IsFitPending = true;
+            if (_scrollViewer == null || _imagePixelWidth <= 0 || _imagePixelHeight <= 0) return;
+
+            double scaleX = _scrollViewer.ActualWidth / _imagePixelWidth;
+            double scaleY = _scrollViewer.ActualHeight / _imagePixelHeight;
+
+            if (UseWidthFit)
+            {
+                // Fit width only, let height scroll
+                AnimateZoom(scaleX);
+            }
+            else
+            {
+                // Fit both dimensions (whichever is smaller)
+                AnimateZoom(Math.Min(scaleX, scaleY));
+            }
+        }
+
+
+        private static void OnZoomChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var control = (PdfViewerControl)d;
+
+            var newValue = (double)e.NewValue;
+            if (newValue < control.MinZoom) newValue = control.MinZoom;
+            if (newValue > control.MaxZoom) newValue = control.MaxZoom;
+
+            if (Math.Abs(newValue - (double)e.NewValue) > double.Epsilon)
+                control.Zoom = newValue;
+
+            control.IsFitPending = false;
+            control.UpdateScaledLayout();
+            control.CenterInView();
+            control.UpdateZoomOverlay();
+        }
+
+        private static void OnZoomBoundsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            var control = (PdfViewerControl)d;
+            if (control.Zoom < control.MinZoom) control.Zoom = control.MinZoom;
+            if (control.Zoom > control.MaxZoom) control.Zoom = control.MaxZoom;
+        }
 
         private void AnimateZoom(double targetZoom, double durationMs = 200)
         {
@@ -436,12 +660,11 @@ namespace Winui3PdfViewer
                 return;
             }
 
-            if (_scrollViewer != null)
-            {
-                scrollRatioX = _scrollViewer.HorizontalOffset / Math.Max(1, _scrollViewer.ExtentWidth - _scrollViewer.ViewportWidth);
-                scrollRatioY = _scrollViewer.VerticalOffset / Math.Max(1, _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight);
-            }
+            if (_isAnimatingZoom) return;
 
+            // Preserve scroll ratios
+            scrollRatioX = _scrollViewer.HorizontalOffset / Math.Max(1, _scrollViewer.ExtentWidth - _scrollViewer.ViewportWidth);
+            scrollRatioY = _scrollViewer.VerticalOffset / Math.Max(1, _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight);
 
             if (targetZoom < MinZoom) targetZoom = MinZoom;
             if (targetZoom > MaxZoom) targetZoom = MaxZoom;
@@ -458,7 +681,7 @@ namespace Winui3PdfViewer
 
             if (!_isAnimatingZoom)
             {
-                Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnZoomAnimationFrame;
+                CompositionTarget.Rendering += OnZoomAnimationFrame;
                 _isAnimatingZoom = true;
             }
         }
@@ -483,8 +706,7 @@ namespace Winui3PdfViewer
 
             if (progress >= 1.0)
             {
-                Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnZoomAnimationFrame;
-                _isAnimatingZoom = false;
+                CompositionTarget.Rendering -= OnZoomAnimationFrame;
 
                 DispatcherQueue?.TryEnqueue(() =>
                 {
@@ -494,34 +716,15 @@ namespace Winui3PdfViewer
                         double newOffsetY = scrollRatioY * Math.Max(1, _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight);
                         _scrollViewer.ChangeView(newOffsetX, newOffsetY, null, true);
                     }
+
+                    _isAnimatingZoom = false;
                 });
-
             }
         }
 
-        public void ZoomIn(double step = 0.1) => AnimateZoom(Zoom + step);
-        public void ZoomOut(double step = 0.1) => AnimateZoom(Zoom - step);
-        public void ZoomTo100() { IsFitPending = false; AnimateZoom(1.0); }
-        public void FitToControl()
-        {
-            IsFitPending = true;
-            if (_scrollViewer == null || _imagePixelWidth <= 0 || _imagePixelHeight <= 0) return;
+        #endregion
 
-            double scaleX = _scrollViewer.ActualWidth / _imagePixelWidth;
-            double scaleY = _scrollViewer.ActualHeight / _imagePixelHeight;
-            AnimateZoom(Math.Min(scaleX, scaleY));
-        }
-
-        private void UpdatePageOverlay()
-        {
-            if (_pageOverlay == null || !SinglePageDisplay || _images.Count == 0)
-            {
-                if (_pageOverlay != null) _pageOverlay.Text = "";
-                return;
-            }
-
-            _pageOverlay.Text = $"Page {_currentIndex + 1} of {_images.Count}";
-        }
+        #region Loading overlay
 
         private void SetLoadingState(bool isLoading)
         {
@@ -537,12 +740,66 @@ namespace Winui3PdfViewer
             });
         }
 
+        #endregion
 
+        #region Cache helpers
 
+        public static void CleanupStaleCaches()
+        {
+            try
+            {
+                var tempRoot = Path.GetTempPath();
+                foreach (var dir in Directory.GetDirectories(tempRoot, "PdfViewer_*"))
+                {
+                    try { Directory.Delete(dir, true); }
+                    catch { /* ignore locked/in-use */ }
+                }
+            }
+            catch
+            {
+                // Ignore cleanup errors
+            }
+        }
 
+        private void EnsureCacheFolder()
+        {
+            if (string.IsNullOrEmpty(_cacheFolder) && UseTempFiles)
+            {
+                CleanupStaleCaches();
+                _cacheFolder = Path.Combine(Path.GetTempPath(), "PdfViewer_" + Guid.NewGuid());
+                Directory.CreateDirectory(_cacheFolder);
+                Debug.WriteLine($"Created cache folder: {_cacheFolder}");
+            }
+        }
 
+        #endregion
 
+        #region Dispose
 
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            try
+            {
+                if (Directory.Exists(_cacheFolder))
+                    Directory.Delete(_cacheFolder, true);
+            }
+            catch
+            {
+                // ignore
+            }
+
+            if (_scrollViewer != null)
+                _scrollViewer.ViewChanged -= OnScrollViewerViewChanged;
+
+            DisposeAndClearRawBitmaps();
+
+            Loaded -= OnLoaded;
+            Unloaded -= OnUnloaded;
+            SizeChanged -= OnSizeChanged;
+        }
 
         #endregion
     }

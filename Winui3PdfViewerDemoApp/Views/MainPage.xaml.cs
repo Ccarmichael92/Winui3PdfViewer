@@ -27,18 +27,19 @@ namespace Winui3PdfViewerDemoApp.Views
         public MainPage()
         {
             this.InitializeComponent();
-            LoadPdf(@"C:\Users\ccarm\iCloudDrive\Downloads\ Cormen, Thomas H_ Leiserson, Charles E_ Rivest, Ronald L_ Stein, - Introduction to Algorithms (2011) - libgen.li.pdf");
+            //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\ Cormen, Thomas H_ Leiserson, Charles E_ Rivest, Ronald L_ Stein, - Introduction to Algorithms (2011) - libgen.li.pdf");
+            //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\2023 CWM Benefit Guide.pdf");
+            LoadFile(@"C:\Users\ccarm\Downloads\multipage_tiff_example.tif");
         }
 
-        private async void LoadPdf(string pdf)
+        private async void LoadFile(string pdf)
         {
             // Load the file from disk
             StorageFile file = await StorageFile.GetFileFromPathAsync(pdf);
 
             // Assign it to the control
-            pdfViewerControl.BitmapProvider = new Winui3PdfViewer.Providers.PdfToBitmapListProvider();
-            await pdfViewerControl.LoadFromStorageFileAsync(file);
-            pdfViewerControl.FitToControl();
+            await pdfViewerControl.LoadFileAsync(file);
+            //pdfViewerControl.SinglePageDisplay = true;
         }
 
     }
