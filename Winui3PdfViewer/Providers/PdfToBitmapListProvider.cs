@@ -22,18 +22,18 @@ namespace Winui3PdfViewer.Providers
             LocalPath = localPath;
             UseLocalFiles = !string.IsNullOrWhiteSpace(localPath);
         }
-        public async Task<BitmapResult> GetBitmapsAsync(StorageFile file, CancellationToken cancellationToken = default)
+        public async Task<BitmapResult> GetBitmapsAsync(StorageFile file, int Dpi, CancellationToken cancellationToken = default)
         {
             return await Task.Run(() =>
             {
                 if (UseLocalFiles)
                 {
-                    var bitmapPaths = Pdf2Bmp.Split(file.Path, LocalPath, 100);
+                    var bitmapPaths = Pdf2Bmp.Split(file.Path, LocalPath, Dpi);
                     return new BitmapResult { FilePaths = bitmapPaths };
                 }
                 else
                 {
-                    var bitmaps = Pdf2Bmp.Split(file.Path, 100);
+                    var bitmaps = Pdf2Bmp.Split(file.Path, Dpi);
                     return new BitmapResult { Bitmaps = bitmaps.Select(s => new Bitmap(s)).ToList() };
                 }                
             });

@@ -11,7 +11,7 @@
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
     <Grid>
-        <pdfViewer:PdfViewerControl SinglePageDisplay="False" UseWidthFit="True" UseTempFiles="True" x:Name="pdfViewerControl"/>
+        <pdfViewer:PdfViewerControl SinglePageDisplay="False" UseWidthFit="True" FitMax="0" UseTempFiles="True" x:Name="pdfViewerControl"/>
 
     </Grid>
 </Page>

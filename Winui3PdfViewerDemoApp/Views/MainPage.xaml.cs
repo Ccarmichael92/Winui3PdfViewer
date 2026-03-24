@@ -29,7 +29,7 @@ namespace Winui3PdfViewerDemoApp.Views
             this.InitializeComponent();
             //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\ Cormen, Thomas H_ Leiserson, Charles E_ Rivest, Ronald L_ Stein, - Introduction to Algorithms (2011) - libgen.li.pdf");
             //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\2023 CWM Benefit Guide.pdf");
-            LoadFile(@"C:\Users\ccarm\Downloads\multipage_tiff_example.tif");
+            LoadFile(@"C:\Users\ccarm\Downloads\Tmpfile.pdf");
         }
 
         private async void LoadFile(string pdf)

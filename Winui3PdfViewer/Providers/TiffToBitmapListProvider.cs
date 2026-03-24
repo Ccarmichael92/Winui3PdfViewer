@@ -27,75 +27,82 @@ namespace Winui3PdfViewer.Providers
             LocalPath = localPath;
             UseLocalFiles = !string.IsNullOrWhiteSpace(localPath);
         }
-        public async Task<BitmapResult> GetBitmapsAsync(StorageFile file, CancellationToken cancellationToken = default)
+
+        public async Task<BitmapResult> GetBitmapsAsync(StorageFile file, int Dpi, CancellationToken cancellationToken = default)
         {
-            return await Task.Run(async () =>
+            // Use WinRT imaging pipeline for decoding and encoding (faster and async-friendly).
+            var filePaths = new List<string>();
+            var bitmaps = new List<Bitmap>();
+
+            using (IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read))
             {
-                var filePaths = new List<string>();
-                var bitmaps = new List<Bitmap>();
-                try
+                var decoder = await BitmapDecoder.CreateAsync(stream);
+
+                for (uint i = 0; i < decoder.FrameCount; i++)
                 {
-                    string path = file.Path;
-                    using var image = Image.FromFile(path);
-                    int frameCount = image.GetFrameCount(FrameDimension.Page);
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                    for (int i = 0; i < frameCount; i++)
+                    var frame = await decoder.GetFrameAsync(i);
+
+                    // Get a BGRA8 SoftwareBitmap suitable for encoder or conversion
+                    using (var softwareBitmap = await frame.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied))
                     {
-                        image.SelectActiveFrame(FrameDimension.Page, i);
-                        var bmp = new Bitmap(image);
-
+                        // If caller requested local files, use BitmapEncoder to save PNG directly from SoftwareBitmap
                         if (UseLocalFiles)
                         {
                             string outputPath = Path.Combine(LocalPath, $"frame_{i}.png");
-                            bmp.Save(outputPath, ImageFormat.Png);
+
+                            // Create or overwrite the destination file via FileStream, then obtain an IRandomAccessStream wrapper
+                            using (var fs = new FileStream(outputPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+                            {
+                                using (IRandomAccessStream outStream = fs.AsRandomAccessStream())
+                                {
+                                    var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream);
+                                    encoder.SetSoftwareBitmap(softwareBitmap);
+                                    // Optionally set DPI via encoder properties
+                                    var properties = new BitmapPropertySet
+                                    {
+                                        { "System.Image.HorizontalResolution", new BitmapTypedValue((double)Dpi, Windows.Foundation.PropertyType.Double) },
+                                        { "System.Image.VerticalResolution", new BitmapTypedValue((double)Dpi, Windows.Foundation.PropertyType.Double) }
+                                    };
+                                    await encoder.BitmapProperties.SetPropertiesAsync(properties);
+                                    await encoder.FlushAsync();
+                                }
+                            }
+
                             filePaths.Add(outputPath);
-                            bmp.Dispose();
                         }
                         else
                         {
+                            // Convert SoftwareBitmap -> byte[] -> System.Drawing.Bitmap
+                            // Copy pixels to managed buffer
+                            var buffer = new byte[softwareBitmap.PixelWidth * softwareBitmap.PixelHeight * 4];
+                            softwareBitmap.CopyToBuffer(buffer.AsBuffer());
+
+                            var bmp = new Bitmap(softwareBitmap.PixelWidth, softwareBitmap.PixelHeight, PixelFormat.Format32bppArgb);
+                            bmp.SetResolution(Dpi, Dpi); // set requested DPI metadata
+
+                            var bmpData = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.WriteOnly, bmp.PixelFormat);
+                            try
+                            {
+                                Marshal.Copy(buffer, 0, bmpData.Scan0, buffer.Length);
+                            }
+                            finally
+                            {
+                                bmp.UnlockBits(bmpData);
+                            }
+
                             bitmaps.Add(bmp);
                         }
                     }
                 }
-                catch
-                {
-                    using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.Read);
-                    var decoder = await BitmapDecoder.CreateAsync(stream);
+            }
 
-                    for (uint i = 0; i < decoder.FrameCount; i++)
-                    {
-                        var frame = await decoder.GetFrameAsync(i);
-                        var softwareBitmap = await frame.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
-
-                        var buffer = new byte[softwareBitmap.PixelWidth * softwareBitmap.PixelHeight * 4];
-                        softwareBitmap.CopyToBuffer(buffer.AsBuffer());
-
-                        var bmp = new Bitmap(softwareBitmap.PixelWidth, softwareBitmap.PixelHeight, PixelFormat.Format32bppArgb);
-                        var bmpData = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.WriteOnly, bmp.PixelFormat);
-                        Marshal.Copy(buffer, 0, bmpData.Scan0, buffer.Length);
-                        bmp.UnlockBits(bmpData);
-
-                        if (UseLocalFiles)
-                        {
-                            string outputPath = Path.Combine(LocalPath, $"frame_{i}.png");
-                            bmp.Save(outputPath, ImageFormat.Png);
-                            filePaths.Add(outputPath);
-                            bmp.Dispose();
-                        }
-                        else
-                        {
-                            bitmaps.Add(bmp);
-                        }
-                    }
-                }
-
-                return new BitmapResult
-                {
-                    FilePaths = UseLocalFiles ? filePaths : null,
-                    Bitmaps = UseLocalFiles ? null : bitmaps
-                };
-
-            });
+            return new BitmapResult
+            {
+                FilePaths = UseLocalFiles ? filePaths : null,
+                Bitmaps = UseLocalFiles ? null : bitmaps
+            };
         }
     }
 }

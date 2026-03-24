@@ -12,6 +12,6 @@ namespace Winui3PdfViewer.Interfaces
 {
     public interface IBitmapProvider
     {
-        Task<BitmapResult> GetBitmapsAsync(StorageFile file, CancellationToken cancellationToken = default);
+        Task<BitmapResult> GetBitmapsAsync(StorageFile file, int Dpi, CancellationToken cancellationToken = default);
     }
 }

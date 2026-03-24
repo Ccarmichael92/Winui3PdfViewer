@@ -11,11 +11,14 @@
 
                         <!-- Scrollable content -->
                         <ScrollViewer x:Name="PART_ScrollViewer"
-                                      HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollMode="Enabled"
-                                      VerticalScrollMode="Enabled"
-                                      ZoomMode="Disabled">
+              HorizontalScrollBarVisibility="Auto"
+              VerticalScrollBarVisibility="Auto"
+              HorizontalScrollMode="Enabled"
+              VerticalScrollMode="Enabled"
+              ZoomMode="Disabled"
+              HorizontalContentAlignment="Stretch"
+              VerticalContentAlignment="Stretch">
+
                             <Grid x:Name="PART_ViewportRoot"
                                   HorizontalAlignment="Stretch"
                                   VerticalAlignment="Stretch">
