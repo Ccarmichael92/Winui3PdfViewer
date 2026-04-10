@@ -76,35 +76,94 @@ namespace Winui3PdfViewer
         private Windows.Foundation.Point _zoomFocalContentPoint;
         private bool _hasZoomFocalPoint;
 
-        // Configurable
+        // Configurable properties
+        /// <summary>
+        /// Gets or sets the bitmap provider used to convert document files to bitmaps.
+        /// </summary>
         public IBitmapProvider? BitmapProvider { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to fit the document to the viewport width.
+        /// </summary>
         public bool UseWidthFit { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to display only one page at a time.
+        /// </summary>
         public bool SinglePageDisplay { get; set; }
+
+        /// <summary>
+        /// Gets or sets the number of pages to preload before and after the current page.
+        /// </summary>
         public int PreloadedPages { get; set; } = 20;
+
+        /// <summary>
+        /// Gets or sets the maximum zoom level for the Fit operation. Set to 0 for no limit.
+        /// Values greater than 10 are treated as percentages.
+        /// </summary>
         public double FitMax { get; set; } = 0.0;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to use temporary files for bitmap storage instead of in-memory storage.
+        /// </summary>
         public bool UseTempFiles { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to fit only the first loaded file.
+        /// </summary>
         public bool OnlyFitFirstFile { get; set; } = false;
+
+        /// <summary>
+        /// Gets or sets the DPI (dots per inch) for rendering documents.
+        /// </summary>
         public int Dpi { get; set; } = 100;
 
         // Cache folder
+        /// <summary>
+        /// Gets the path to the temporary cache folder used for storing bitmap files.
+        /// </summary>
         public string CacheFolder { get; private set; } = string.Empty;
 
-        // Zoom DP
+        // Zoom DependencyProperty
+        /// <summary>
+        /// Identifies the <see cref="Zoom"/> dependency property.
+        /// </summary>
         public static readonly DependencyProperty ZoomProperty =
             DependencyProperty.Register(nameof(Zoom), typeof(double), typeof(PdfViewerControl),
                 new PropertyMetadata(1.0, OnZoomChanged));
+
+        /// <summary>
+        /// Gets or sets the current zoom level. Default is 1.0 (100%).
+        /// </summary>
         public double Zoom { get => (double)GetValue(ZoomProperty); set => SetValue(ZoomProperty, value); }
 
+        /// <summary>
+        /// Identifies the <see cref="MinZoom"/> dependency property.
+        /// </summary>
         public static readonly DependencyProperty MinZoomProperty =
             DependencyProperty.Register(nameof(MinZoom), typeof(double), typeof(PdfViewerControl),
                 new PropertyMetadata(0.1));
+
+        /// <summary>
+        /// Gets or sets the minimum allowed zoom level. Default is 0.1 (10%).
+        /// </summary>
         public double MinZoom { get => (double)GetValue(MinZoomProperty); set => SetValue(MinZoomProperty, value); }
 
+        /// <summary>
+        /// Identifies the <see cref="MaxZoom"/> dependency property.
+        /// </summary>
         public static readonly DependencyProperty MaxZoomProperty =
             DependencyProperty.Register(nameof(MaxZoom), typeof(double), typeof(PdfViewerControl),
                 new PropertyMetadata(8.0));
+
+        /// <summary>
+        /// Gets or sets the maximum allowed zoom level. Default is 8.0 (800%).
+        /// </summary>
         public double MaxZoom { get => (double)GetValue(MaxZoomProperty); set => SetValue(MaxZoomProperty, value); }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PdfViewerControl"/> class.
+        /// </summary>
         public PdfViewerControl()
         {
             DefaultStyleKey = typeof(PdfViewerControl);
@@ -397,10 +456,26 @@ namespace Winui3PdfViewer
 
         #region Zoom / Fit (deferred-fit + focal-point zoom with 20% width reduction stop-gap)
 
+        /// <summary>
+        /// Increases the zoom level by the specified step.
+        /// </summary>
+        /// <param name="step">The amount to increase the zoom level. Default is 0.1 (10%).</param>
         public void ZoomIn(double step = 0.1) => AnimateZoom(Zoom + step);
+
+        /// <summary>
+        /// Decreases the zoom level by the specified step.
+        /// </summary>
+        /// <param name="step">The amount to decrease the zoom level. Default is 0.1 (10%).</param>
         public void ZoomOut(double step = 0.1) => AnimateZoom(Zoom - step);
+
+        /// <summary>
+        /// Sets the zoom level to 100% (1.0).
+        /// </summary>
         public void ZoomTo100() { IsFitPending = false; AnimateZoom(1.0); }
 
+        /// <summary>
+        /// Fits the current document page to the viewport dimensions.
+        /// </summary>
         public void FitToControl()
         {
             // mark intent
@@ -976,6 +1051,9 @@ namespace Winui3PdfViewer
             _rawBitmaps = null;
         }
 
+        /// <summary>
+        /// Releases all resources used by the <see cref="PdfViewerControl"/>.
+        /// </summary>
         public void Dispose()
         {
             DisposeAndClearRawBitmaps();

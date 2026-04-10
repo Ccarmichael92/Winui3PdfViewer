@@ -1,46 +1,79 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
 using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
 using Windows.Storage;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
 
 namespace Winui3PdfViewerDemoApp.Views
 {
     /// <summary>
-    /// An empty page that can be used on its own or navigated to within a Frame.
+    /// The main page that hosts the PDF viewer control.
     /// </summary>
     public sealed partial class MainPage : Page
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MainPage"/> class.
+        /// </summary>
         public MainPage()
         {
-            this.InitializeComponent();
-            //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\ Cormen, Thomas H_ Leiserson, Charles E_ Rivest, Ronald L_ Stein, - Introduction to Algorithms (2011) - libgen.li.pdf");
-            //LoadFile(@"C:\Users\ccarm\iCloudDrive\Downloads\2023 CWM Benefit Guide.pdf");
-            LoadFile(@"C:\Users\ccarm\Downloads\Tmpfile.pdf");
+            InitializeComponent();
+
+            // Example: Load a default file for demo purposes
+            // Replace with your own file path or remove for production
+            string defaultFilePath = @"C:\DMS\Test.pdf";
+            if (File.Exists(defaultFilePath))
+            {
+                _ = LoadFileAsync(defaultFilePath);
+            }
         }
 
-        private async void LoadFile(string pdf)
+        /// <summary>
+        /// Asynchronously loads a PDF or TIFF file into the viewer.
+        /// </summary>
+        /// <param name="filePath">The full path to the file to load.</param>
+        private async System.Threading.Tasks.Task LoadFileAsync(string filePath)
         {
-            // Load the file from disk
-            StorageFile file = await StorageFile.GetFileFromPathAsync(pdf);
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                Debug.WriteLine("[MainPage] File path is null or empty.");
+                return;
+            }
 
-            // Assign it to the control
-            await pdfViewerControl.LoadFileAsync(file);
-            //pdfViewerControl.SinglePageDisplay = true;
+            if (!File.Exists(filePath))
+            {
+                Debug.WriteLine($"[MainPage] File not found: {filePath}");
+                return;
+            }
+
+            try
+            {
+                StorageFile file = await StorageFile.GetFileFromPathAsync(filePath);
+                await pdfViewerControl.LoadFileAsync(file);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.WriteLine($"[MainPage] Access denied to file: {filePath}. Error: {ex.Message}");
+                ShowErrorDialog("Access Denied", $"Cannot access the file: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MainPage] Failed to load file: {filePath}. Error: {ex}");
+                ShowErrorDialog("Load Error", $"Failed to load file: {ex.Message}");
+            }
         }
 
+        private async void ShowErrorDialog(string title, string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = title,
+                Content = message,
+                CloseButtonText = "OK",
+                XamlRoot = Content.XamlRoot
+            };
+
+            await dialog.ShowAsync();
+        }
     }
 }
