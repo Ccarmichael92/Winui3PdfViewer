@@ -20,12 +20,7 @@ namespace Winui3PdfViewerDemoApp.Views
             InitializeComponent();
 
             // Example: Load a default file for demo purposes
-            // Replace with your own file path or remove for production
-            string defaultFilePath = @"C:\DMS\Test.pdf";
-            if (File.Exists(defaultFilePath))
-            {
-                _ = LoadFileAsync(defaultFilePath);
-            }
+            // Use a file picker or application resource to load files in production
         }
 
         /// <summary>
